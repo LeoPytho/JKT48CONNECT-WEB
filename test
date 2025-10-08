@@ -1,149 +1,121 @@
 const WebSocket = require('ws');
 const readline = require('readline');
 
-// Helper function to generate UUID v4
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-}
-
-// Create readline interface for user input
+// Interface untuk input
 const rl = readline.createInterface({
   input: process.stdin,
   output: process.stdout
 });
 
-console.log('=== WebSocket Chat Room Tester ===\n');
+// Fungsi untuk bertanya
+function ask(question) {
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      resolve(answer);
+    });
+  });
+}
 
-// Ask for chat room ID
-rl.question('Masukkan Chat Room ID (contoh: arn:aws:ivschat:us-east-1:050891932989:room/251008184322): ', (chatRoomId) => {
-  if (!chatRoomId || chatRoomId.trim() === '') {
-    console.log('❌ Chat Room ID tidak boleh kosong!');
+// Fungsi utama
+async function main() {
+  console.log('=== WebSocket Chat Tester IDN ===\n');
+  
+  // Input channel ID langsung
+  const channelId = await ask('Masukkan Channel ID (contoh: arn:aws:ivschat:us-east-1:050891932989:room/251008184322): ');
+  
+  if (!channelId) {
+    console.log('Channel ID tidak boleh kosong!');
     rl.close();
     return;
   }
-
-  console.log(`\n🔄 Menghubungkan ke chat room: ${chatRoomId}\n`);
   
-  startChatConnection(chatRoomId.trim());
-});
-
-function startChatConnection(chatRoomId) {
-  const ws = new WebSocket('wss://chat.idn.app/');
-  const uuid = generateUUID();
-  const userId = generateUUID();
-  const timestamp = new Date().getTime();
+  console.log(`\nChannel ID: ${channelId}`);
+  console.log('Menghubungkan ke WebSocket...\n');
   
-  let isAuthenticated = false;
-  let hasJoinedChannel = false;
-  let messageCount = 0;
-
+  // Buat koneksi WebSocket
+  const ws = new WebSocket('wss://chat.idn.app');
+  const nickname = 'user_' + Math.random().toString(36).substring(2, 8);
+  
   ws.on('open', () => {
-    console.log('✅ WebSocket terhubung!');
-    console.log('📤 Mengirim autentikasi...\n');
+    console.log('✓ WebSocket terhubung');
+    console.log(`✓ Nickname: ${nickname}\n`);
     
-    // Send authentication sequence
-    ws.send('CAP LS 302');
-    ws.send(`NICK idn-${userId}-${timestamp}`);
-    ws.send(`USER ${userId}_${uuid} 0 * null`);
-    ws.send(`CAP REQ :account-notify account-tag away-notify batch cap-notify chghost echo-message extended-join invite-notify labeled-response message-tags multi-prefix server-time setname userhost-in-names`);
-    ws.send(`CAP END`);
+    // Kirim authentikasi
+    ws.send('NICK ' + nickname);
+    ws.send('USER websocket 0 * :WebSocket User');
   });
-
+  
   ws.on('message', (message) => {
     const msgStr = message.toString();
     
     // Handle PING
-    if (msgStr.includes('PING :')) {
-      try {
-        const split = msgStr.split('PING :') || [];
-        const key = split[split.length - 1];
-        ws.send(`PONG ${key}`);
-        console.log('🏓 PING-PONG');
-      } catch (e) {
-        console.error('❌ PING/PONG error:', e);
-      }
+    if (msgStr.startsWith('PING')) {
+      ws.send('PONG' + msgStr.substring(4));
+      console.log('⟳ PONG sent');
       return;
     }
     
-    // Handle Welcome message (authentication successful)
-    if (msgStr.includes(':Welcome') && !isAuthenticated) {
-      isAuthenticated = true;
-      console.log('✅ Autentikasi berhasil!');
-      console.log(`📥 Bergabung ke channel: ${chatRoomId}\n`);
-      ws.send(`@label=1 JOIN #${chatRoomId}`);
+    // Handle authentikasi berhasil
+    if (msgStr.includes('001')) {
+      console.log('✓ Authentikasi berhasil');
+      ws.send('JOIN #' + channelId);
+      console.log(`✓ Bergabung ke channel: ${channelId}\n`);
+      console.log('--- Menunggu pesan chat ---\n');
       return;
     }
     
-    // Handle successful JOIN
-    if (msgStr.includes('JOIN') && msgStr.includes(chatRoomId) && !hasJoinedChannel) {
-      hasJoinedChannel = true;
-      console.log('✅ Berhasil bergabung ke channel!');
-      console.log('👂 Menunggu pesan chat...\n');
-      console.log('=' .repeat(80));
+    // Handle JOIN confirmation
+    if (msgStr.includes('JOIN')) {
+      console.log('✓ Berhasil join channel\n');
       return;
     }
     
     // Handle chat messages
-    if (msgStr.includes(`${chatRoomId} :`)) {
-      try {
-        const data = msgStr.split(`${chatRoomId} :`).pop();
-        if (data) {
-          const event = JSON.parse(data);
-          if (event.chat) {
-            messageCount++;
-            const timestamp = new Date().toLocaleTimeString('id-ID');
-            
-            console.log(`\n[${messageCount}] ${timestamp}`);
-            console.log(`👤 User: ${event.user?.name || 'Unknown'} (@${event.user?.username || 'unknown'})`);
-            console.log(`💬 Pesan: ${event.chat.message}`);
-            
-            if (event.user?.color_code) {
-              console.log(`🎨 Warna: ${event.user.color_code}`);
-            }
-            
-            console.log('-'.repeat(80));
-          }
+    if (msgStr.includes('PRIVMSG')) {
+      const messageMatch = msgStr.match(/PRIVMSG #[^ ]+ :(.*)/);
+      if (messageMatch) {
+        try {
+          const chatData = JSON.parse(messageMatch[1]);
+          
+          // Tampilkan raw data
+          console.log('📨 RAW DATA:');
+          console.log(JSON.stringify(chatData, null, 2));
+          console.log('\n' + '='.repeat(80) + '\n');
+          
+        } catch (parseError) {
+          console.log('⚠ Gagal parse message:', msgStr);
         }
-      } catch (parseError) {
-        console.error('❌ Gagal parse pesan:', parseError.message);
       }
       return;
     }
     
-    // Show other IRC messages for debugging (optional)
-    if (msgStr.includes('NOTICE') || msgStr.includes('MODE') || msgStr.match(/^:[^ ]+ \d{3}/)) {
-      // Uncomment line below to see all IRC protocol messages
-      // console.log('ℹ️  IRC:', msgStr.substring(0, 100));
-    }
+    // Tampilkan pesan lain yang tidak dihandle
+    console.log('📩 Message lain:', msgStr);
   });
-
-  ws.on('error', (error) => {
-    console.error('\n❌ WebSocket error:', error.message);
-  });
-
-  ws.on('close', (code, reason) => {
-    console.log(`\n🔌 WebSocket terputus`);
-    console.log(`   Code: ${code}`);
-    if (reason) console.log(`   Reason: ${reason}`);
-    console.log(`\n📊 Total pesan diterima: ${messageCount}`);
-    
+  
+  ws.on('close', () => {
+    console.log('\n✗ WebSocket terputus');
     rl.close();
     process.exit(0);
   });
-
-  // Handle Ctrl+C gracefully
+  
+  ws.on('error', (error) => {
+    console.error('\n✗ WebSocket error:', error.message);
+    rl.close();
+    process.exit(1);
+  });
+  
+  // Handle Ctrl+C
   process.on('SIGINT', () => {
-    console.log('\n\n⏹️  Menghentikan koneksi...');
+    console.log('\n\nMemutuskan koneksi...');
     ws.close();
+    rl.close();
+    process.exit(0);
   });
 }
 
-// Handle readline close
-rl.on('close', () => {
-  console.log('\n👋 Terima kasih telah menggunakan Chat Room Tester!');
-  process.exit(0);
+// Jalankan
+main().catch(error => {
+  console.error('Error:', error);
+  process.exit(1);
 });
